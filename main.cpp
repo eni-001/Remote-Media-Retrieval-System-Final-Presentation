@@ -1,12 +1,15 @@
 #include <iostream>
 #include <string>
 #include <limits>
+#include <vector>
+#include <cstdlib>
 
 #include "ClientController.h"
 #include "Logger.h"
 #include "Packet.h"
 #include "PacketFactory.h"
 #include "CommandType.h"
+#include "FileChunkHelper.h"
 
 void DisplayMenu()
 {
@@ -19,13 +22,26 @@ void DisplayMenu()
     std::cout << "Select an option: ";
 }
 
+std::string HexToBinary(const std::string& hex)
+{
+    std::string output;
+
+    for (size_t i = 0; i + 1 < hex.length(); i += 2)
+    {
+        std::string byteString = hex.substr(i, 2);
+        char byte = static_cast<char>(std::strtol(byteString.c_str(), nullptr, 16));
+        output.push_back(byte);
+    }
+
+    return output;
+}
+
 int main()
 {
     ClientController controller;
     const std::string logFile = "client_log.txt";
 
     int choice = 0;
-    bool authenticated = false;
 
     std::cout << "Remote Media Retrieval System - Client Application\n";
 
@@ -98,20 +114,20 @@ int main()
 
             if (responsePacket.command == CommandType::Response && responsePacket.payload == "AUTH_OK")
             {
-                authenticated = true;
+                controller.SetAuthenticated(true);
                 std::cout << "Authentication successful.\n";
                 Logger::WriteRxLog(logFile, "Received AUTH_OK packet.");
             }
             else
             {
-                authenticated = false;
+                controller.SetAuthenticated(false);
                 std::cout << "Authentication failed.\n";
                 Logger::WriteLog(logFile, "Authentication response packet invalid.");
             }
         }
         else if (choice == 3)
         {
-            if (!authenticated)
+            if (!controller.IsAuthenticated())
             {
                 std::cout << "Client is not authenticated.\n";
                 Logger::WriteLog(logFile, "File list request denied: client not authenticated.");
@@ -137,12 +153,28 @@ int main()
                 continue;
             }
 
-            std::cout << "\nServer Response:\n" << responsePacket.payload << "\n";
+            std::cout << "\nServer Response:\n";
+
+            std::string payload = responsePacket.payload;
+            size_t start = 0;
+            while (true)
+            {
+                size_t pos = payload.find("##", start);
+                if (pos == std::string::npos)
+                {
+                    std::cout << payload.substr(start) << "\n";
+                    break;
+                }
+
+                std::cout << payload.substr(start, pos - start) << "\n";
+                start = pos + 2;
+            }
+
             Logger::WriteRxLog(logFile, "Received file list response packet.");
         }
         else if (choice == 4)
         {
-            if (!authenticated)
+            if (!controller.IsAuthenticated())
             {
                 std::cout << "Client is not authenticated.\n";
                 Logger::WriteLog(logFile, "Get image denied: client not authenticated.");
@@ -171,16 +203,76 @@ int main()
 
             Logger::WriteTxLog(logFile, "Sent GET_IMAGE packet for " + requestedFile);
 
-            Packet responsePacket = controller.ReceivePacket();
-            if (responsePacket.payload.empty())
+            std::vector<std::string> receivedChunks;
+            bool transferFinished = false;
+            bool transferFailed = false;
+
+            while (!transferFinished)
             {
-                std::cout << "No response from server.\n";
-                Logger::WriteLog(logFile, "No response packet received for GET_IMAGE.");
-                continue;
+                Packet incomingPacket = controller.ReceivePacket();
+
+                if (incomingPacket.command == CommandType::None && incomingPacket.payload.empty())
+                {
+                    std::cout << "No packet received from server.\n";
+                    Logger::WriteLog(logFile, "No packet received during image transfer.");
+                    transferFailed = true;
+                    break;
+                }
+
+                if (incomingPacket.command == CommandType::TransferChunk)
+                {
+                    std::string binaryChunk = HexToBinary(incomingPacket.payload);
+                    receivedChunks.push_back(binaryChunk);
+
+                    std::cout << "Received chunk #" << incomingPacket.sequenceNumber
+                        << " | Size: " << binaryChunk.size() << " bytes\n";
+
+                    Logger::WriteRxLog(
+                        logFile,
+                        "Received chunk #" + std::to_string(incomingPacket.sequenceNumber)
+                    );
+                }
+                else if (incomingPacket.command == CommandType::TransferComplete)
+                {
+                    transferFinished = true;
+                    Logger::WriteRxLog(logFile, "Received TRANSFER_COMPLETE packet.");
+                }
+                else if (incomingPacket.command == CommandType::Error)
+                {
+                    std::cout << "Server Response: " << incomingPacket.payload << "\n";
+                    Logger::WriteLog(logFile, "Server returned error during image transfer: " + incomingPacket.payload);
+                    transferFailed = true;
+                    break;
+                }
+                else
+                {
+                    std::cout << "Unexpected packet received.\n";
+                    Logger::WriteLog(logFile, "Unexpected packet received during image transfer.");
+                    transferFailed = true;
+                    break;
+                }
             }
 
-            std::cout << "Server Response: " << responsePacket.payload << "\n";
-            Logger::WriteRxLog(logFile, "Received GET_IMAGE response packet.");
+            if (!transferFailed && !receivedChunks.empty())
+            {
+                std::string outputFileName = "downloaded_" + requestedFile;
+
+                if (FileChunkHelper::WriteChunksToFile(outputFileName, receivedChunks))
+                {
+                    std::cout << "Image saved as " << outputFileName << "\n";
+                    Logger::WriteLog(logFile, "Image saved as " + outputFileName);
+                }
+                else
+                {
+                    std::cout << "Failed to save image.\n";
+                    Logger::WriteLog(logFile, "Failed to save reconstructed image.");
+                }
+            }
+            else if (!transferFailed)
+            {
+                std::cout << "No image chunks were received.\n";
+                Logger::WriteLog(logFile, "No image chunks were received.");
+            }
         }
         else if (choice == 5)
         {

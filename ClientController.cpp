@@ -1,5 +1,7 @@
 #include "ClientController.h"
 
+#include <cstdlib>
+
 ClientController::ClientController()
     : connected(false), authenticated(false)
 {
@@ -9,6 +11,18 @@ bool ClientController::ConnectToServer(const std::string& ip, const std::string&
 {
     if (ip.empty() || port.empty())
     {
+        return false;
+    }
+
+    int portNumber = std::atoi(port.c_str());
+    if (portNumber <= 0)
+    {
+        return false;
+    }
+
+    if (!tcpClient.Connect(ip, portNumber))
+    {
+        connected = false;
         return false;
     }
 
@@ -28,22 +42,40 @@ bool ClientController::Authenticate(const std::string& username, const std::stri
         return false;
     }
 
-    authenticated = true;
     return true;
 }
 
-std::vector<FileRecord> ClientController::GetMockFileList() const
+bool ClientController::SendPacket(const Packet& packet)
 {
-    if (!authenticated)
+    if (!connected)
     {
-        return {};
+        return false;
     }
 
-    return {
-        FileRecord("image1.jpg", "JPEG", 245760),
-        FileRecord("image2.jpg", "JPEG", 532480),
-        FileRecord("sample_large_image.jpg", "JPEG", 1572864)
-    };
+    return tcpClient.SendMessage(packet.Serialize());
+}
+
+Packet ClientController::ReceivePacket()
+{
+    if (!connected)
+    {
+        return Packet();
+    }
+
+    std::string response = tcpClient.ReceiveMessage();
+    if (response.empty())
+    {
+        return Packet();
+    }
+
+    return Packet::Deserialize(response);
+}
+
+void ClientController::Disconnect()
+{
+    tcpClient.Disconnect();
+    connected = false;
+    authenticated = false;
 }
 
 bool ClientController::IsConnected() const
@@ -54,4 +86,9 @@ bool ClientController::IsConnected() const
 bool ClientController::IsAuthenticated() const
 {
     return authenticated;
+}
+
+void ClientController::SetAuthenticated(bool value)
+{
+    authenticated = value;
 }
