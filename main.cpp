@@ -1,11 +1,12 @@
 #include <iostream>
 #include <string>
-#include <vector>
 #include <limits>
 
 #include "ClientController.h"
 #include "Logger.h"
-#include "FileRecord.h"
+#include "Packet.h"
+#include "PacketFactory.h"
+#include "CommandType.h"
 
 void DisplayMenu()
 {
@@ -24,6 +25,7 @@ int main()
     const std::string logFile = "client_log.txt";
 
     int choice = 0;
+    bool authenticated = false;
 
     std::cout << "Remote Media Retrieval System - Client Application\n";
 
@@ -74,50 +76,73 @@ int main()
             std::cout << "Enter Password: ";
             std::getline(std::cin, password);
 
-            if (controller.Authenticate(username, password))
+            if (!controller.Authenticate(username, password))
             {
+                std::cout << "Authentication failed before packet send.\n";
+                Logger::WriteLog(logFile, "Client authentication validation failed.");
+                continue;
+            }
+
+            Packet authPacket = PacketFactory::CreateAuthPacket(username, password);
+
+            if (!controller.SendPacket(authPacket))
+            {
+                std::cout << "Failed to send authentication packet.\n";
+                Logger::WriteLog(logFile, "Failed to send authentication packet.");
+                continue;
+            }
+
+            Logger::WriteTxLog(logFile, "Sent AUTH packet.");
+
+            Packet responsePacket = controller.ReceivePacket();
+
+            if (responsePacket.command == CommandType::Response && responsePacket.payload == "AUTH_OK")
+            {
+                authenticated = true;
                 std::cout << "Authentication successful.\n";
-                Logger::WriteTxLog(logFile, "Client authenticated successfully.");
-                Logger::WriteRxLog(logFile, "Server returned AUTH_OK.");
+                Logger::WriteRxLog(logFile, "Received AUTH_OK packet.");
             }
             else
             {
+                authenticated = false;
                 std::cout << "Authentication failed.\n";
-                Logger::WriteLog(logFile, "Client authentication failed.");
+                Logger::WriteLog(logFile, "Authentication response packet invalid.");
             }
         }
         else if (choice == 3)
         {
-            if (!controller.IsAuthenticated())
+            if (!authenticated)
             {
                 std::cout << "Client is not authenticated.\n";
                 Logger::WriteLog(logFile, "File list request denied: client not authenticated.");
                 continue;
             }
 
-            if (!controller.SendRawMessage("LIST_FILES"))
+            Packet listPacket = PacketFactory::CreateListFilesPacket();
+
+            if (!controller.SendPacket(listPacket))
             {
-                std::cout << "Failed to send file list request.\n";
-                Logger::WriteLog(logFile, "Failed to send LIST_FILES request.");
+                std::cout << "Failed to send file list packet.\n";
+                Logger::WriteLog(logFile, "Failed to send LIST_FILES packet.");
                 continue;
             }
 
-            Logger::WriteTxLog(logFile, "Sent LIST_FILES request.");
+            Logger::WriteTxLog(logFile, "Sent LIST_FILES packet.");
 
-            std::string response = controller.ReceiveRawMessage();
-            if (response.empty())
+            Packet responsePacket = controller.ReceivePacket();
+            if (responsePacket.payload.empty())
             {
                 std::cout << "No response from server.\n";
-                Logger::WriteLog(logFile, "No response received for LIST_FILES.");
+                Logger::WriteLog(logFile, "No response packet received for LIST_FILES.");
                 continue;
             }
 
-            std::cout << "\nServer Response:\n" << response << "\n";
-            Logger::WriteRxLog(logFile, "Received file list response from server.");
+            std::cout << "\nServer Response:\n" << responsePacket.payload << "\n";
+            Logger::WriteRxLog(logFile, "Received file list response packet.");
         }
         else if (choice == 4)
         {
-            if (!controller.IsAuthenticated())
+            if (!authenticated)
             {
                 std::cout << "Client is not authenticated.\n";
                 Logger::WriteLog(logFile, "Get image denied: client not authenticated.");
@@ -135,27 +160,27 @@ int main()
                 continue;
             }
 
-            std::string requestMessage = "GET_IMAGE|" + requestedFile;
+            Packet imagePacket = PacketFactory::CreateGetImagePacket(requestedFile);
 
-            if (!controller.SendRawMessage(requestMessage))
+            if (!controller.SendPacket(imagePacket))
             {
-                std::cout << "Failed to send image request.\n";
-                Logger::WriteLog(logFile, "Failed to send GET_IMAGE request.");
+                std::cout << "Failed to send GET_IMAGE packet.\n";
+                Logger::WriteLog(logFile, "Failed to send GET_IMAGE packet.");
                 continue;
             }
 
-            Logger::WriteTxLog(logFile, "Requested image: " + requestedFile);
+            Logger::WriteTxLog(logFile, "Sent GET_IMAGE packet for " + requestedFile);
 
-            std::string response = controller.ReceiveRawMessage();
-            if (response.empty())
+            Packet responsePacket = controller.ReceivePacket();
+            if (responsePacket.payload.empty())
             {
                 std::cout << "No response from server.\n";
-                Logger::WriteLog(logFile, "No response received for GET_IMAGE.");
+                Logger::WriteLog(logFile, "No response packet received for GET_IMAGE.");
                 continue;
             }
 
-            std::cout << "Server Response: " << response << "\n";
-            Logger::WriteRxLog(logFile, "Received GET_IMAGE response from server.");
+            std::cout << "Server Response: " << responsePacket.payload << "\n";
+            Logger::WriteRxLog(logFile, "Received GET_IMAGE response packet.");
         }
         else if (choice == 5)
         {
