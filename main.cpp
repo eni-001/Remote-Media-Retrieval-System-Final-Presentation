@@ -34,12 +34,12 @@ int main()
         if (!(std::cin >> choice))
         {
             std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
             std::cout << "Invalid input. Please enter a number.\n";
             continue;
         }
 
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
 
         if (choice == 1)
         {
@@ -78,6 +78,7 @@ int main()
             {
                 std::cout << "Authentication successful.\n";
                 Logger::WriteTxLog(logFile, "Client authenticated successfully.");
+                Logger::WriteRxLog(logFile, "Server returned AUTH_OK.");
             }
             else
             {
@@ -87,73 +88,78 @@ int main()
         }
         else if (choice == 3)
         {
-            std::vector<FileRecord> files = controller.GetMockFileList();
+            if (!controller.IsAuthenticated())
+            {
+                std::cout << "Client is not authenticated.\n";
+                Logger::WriteLog(logFile, "File list request denied: client not authenticated.");
+                continue;
+            }
 
-            if (files.empty())
+            if (!controller.SendRawMessage("LIST_FILES"))
             {
-                std::cout << "No files available or client not authenticated.\n";
-                Logger::WriteLog(logFile, "File list request failed or no files returned.");
+                std::cout << "Failed to send file list request.\n";
+                Logger::WriteLog(logFile, "Failed to send LIST_FILES request.");
+                continue;
             }
-            else
+
+            Logger::WriteTxLog(logFile, "Sent LIST_FILES request.");
+
+            std::string response = controller.ReceiveRawMessage();
+            if (response.empty())
             {
-                std::cout << "\nAvailable Files:\n";
-                for (size_t i = 0; i < files.size(); ++i)
-                {
-                    std::cout << i + 1 << ". "
-                        << files[i].fileName
-                        << " | Type: " << files[i].fileType
-                        << " | Size: " << files[i].fileSizeBytes << " bytes\n";
-                }
-                Logger::WriteRxLog(logFile, "File list retrieved successfully.");
+                std::cout << "No response from server.\n";
+                Logger::WriteLog(logFile, "No response received for LIST_FILES.");
+                continue;
             }
+
+            std::cout << "\nServer Response:\n" << response << "\n";
+            Logger::WriteRxLog(logFile, "Received file list response from server.");
         }
         else if (choice == 4)
         {
-            std::vector<FileRecord> files = controller.GetMockFileList();
-
-            if (files.empty())
+            if (!controller.IsAuthenticated())
             {
-                std::cout << "No files available or client not authenticated.\n";
-                Logger::WriteLog(logFile, "Get image failed: file list unavailable.");
+                std::cout << "Client is not authenticated.\n";
+                Logger::WriteLog(logFile, "Get image denied: client not authenticated.");
                 continue;
             }
 
-            std::cout << "\nAvailable Files:\n";
-            for (size_t i = 0; i < files.size(); ++i)
-            {
-                std::cout << i + 1 << ". "
-                    << files[i].fileName
-                    << " | Type: " << files[i].fileType
-                    << " | Size: " << files[i].fileSizeBytes << " bytes\n";
-            }
+            std::string requestedFile;
+            std::cout << "Enter exact file name to request: ";
+            std::getline(std::cin, requestedFile);
 
-            std::cout << "Select file number: ";
-            size_t fileChoice = 0;
-
-            if (!(std::cin >> fileChoice))
+            if (requestedFile.empty())
             {
-                std::cin.clear();
-                std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                std::cout << "Invalid file selection.\n";
-                Logger::WriteLog(logFile, "Get image failed: invalid selection input.");
+                std::cout << "Invalid file name.\n";
+                Logger::WriteLog(logFile, "Get image failed: empty file name.");
                 continue;
             }
 
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::string requestMessage = "GET_IMAGE|" + requestedFile;
 
-            if (fileChoice < 1 || fileChoice > files.size())
+            if (!controller.SendRawMessage(requestMessage))
             {
-                std::cout << "Invalid file selection.\n";
-                Logger::WriteLog(logFile, "Get image failed: selection out of range.");
+                std::cout << "Failed to send image request.\n";
+                Logger::WriteLog(logFile, "Failed to send GET_IMAGE request.");
                 continue;
             }
 
-            FileRecord selectedFile = files[fileChoice - 1];
-            std::cout << "Requested image: " << selectedFile.fileName << '\n';
-            Logger::WriteTxLog(logFile, "Requested image: " + selectedFile.fileName);
+            Logger::WriteTxLog(logFile, "Requested image: " + requestedFile);
+
+            std::string response = controller.ReceiveRawMessage();
+            if (response.empty())
+            {
+                std::cout << "No response from server.\n";
+                Logger::WriteLog(logFile, "No response received for GET_IMAGE.");
+                continue;
+            }
+
+            std::cout << "Server Response: " << response << "\n";
+            Logger::WriteRxLog(logFile, "Received GET_IMAGE response from server.");
         }
         else if (choice == 5)
         {
+            controller.Disconnect();
             std::cout << "Exiting client application.\n";
             Logger::WriteLog(logFile, "Client application exited.");
             break;
