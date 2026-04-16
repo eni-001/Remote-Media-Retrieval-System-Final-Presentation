@@ -19,7 +19,6 @@ ServerController::ServerController()
 {
 }
 
-// Convert binary chunk to hex text so it is safe to send inside packets
 std::string ToHex(const std::string& input)
 {
     std::ostringstream oss;
@@ -80,8 +79,53 @@ bool ServerController::SendPacket(const Packet& packet)
     return tcpServer.SendMessage(packet.Serialize());
 }
 
+std::string BuildFileListPayload(const fs::path& baseFolder)
+{
+    std::ostringstream payload;
+    bool first = true;
+
+    if (!fs::exists(baseFolder) || !fs::is_directory(baseFolder))
+    {
+        return "";
+    }
+
+    for (const auto& entry : fs::directory_iterator(baseFolder))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
+        }
+
+        std::string fileName = entry.path().filename().string();
+        std::string extension = entry.path().extension().string();
+        std::uintmax_t fileSize = entry.file_size();
+
+        std::string type = "UNKNOWN";
+        if (extension == ".jpg" || extension == ".jpeg" || extension == ".JPG" || extension == ".JPEG")
+        {
+            type = "JPEG";
+        }
+
+        if (!first)
+        {
+            payload << "##";
+        }
+
+        payload << fileName << "|" << type << "|" << fileSize;
+        first = false;
+    }
+
+    return payload.str();
+}
+
 Packet ServerController::ProcessPacket(const Packet& packet)
 {
+    if (!packet.IsValid())
+    {
+        stateMachine.SetState(ServerState::Error);
+        return PacketFactory::CreateErrorPacket("ERROR|INVALID_PACKET", 1);
+    }
+
     if (packet.command == CommandType::Authenticate)
     {
         stateMachine.SetState(ServerState::AuthenticatedReady);
@@ -90,16 +134,41 @@ Packet ServerController::ProcessPacket(const Packet& packet)
 
     if (packet.command == CommandType::RequestFileList)
     {
-        std::string payload =
-            "image1.jpg|JPEG|245760##"
-            "image2.jpg|JPEG|532480##"
-            "sample_large_image.jpg|JPEG|1572864";
+        if (stateMachine.GetCurrentState() != ServerState::AuthenticatedReady)
+        {
+            return PacketFactory::CreateErrorPacket("ERROR|NOT_AUTHENTICATED", 1);
+        }
 
-        return PacketFactory::CreateResponsePacket(CommandType::Response, payload, 1);
+        fs::path currentDir = fs::current_path();
+        std::vector<fs::path> candidateFolders =
+        {
+            currentDir / "ServerFiles",
+            currentDir / "RemoteMediaRetrievalSystem" / "ServerFiles",
+            currentDir.parent_path() / "ServerFiles",
+            currentDir.parent_path().parent_path() / "ServerFiles",
+            fs::path("C:\\Users\\eenio\\OneDrive\\Desktop\\ServerFiles"),
+            fs::path("C:\\Users\\eenio\\OneDrive\\Desktop\\RemoteMediaRetrievalSystem\\ServerFiles")
+        };
+
+        for (const auto& folder : candidateFolders)
+        {
+            std::string payload = BuildFileListPayload(folder);
+            if (!payload.empty())
+            {
+                return PacketFactory::CreateResponsePacket(CommandType::Response, payload, 1);
+            }
+        }
+
+        return PacketFactory::CreateErrorPacket("ERROR|NO_FILES_AVAILABLE", 1);
     }
 
     if (packet.command == CommandType::GetImage)
     {
+        if (stateMachine.GetCurrentState() != ServerState::AuthenticatedReady)
+        {
+            return PacketFactory::CreateErrorPacket("ERROR|NOT_AUTHENTICATED", 1);
+        }
+
         stateMachine.SetState(ServerState::Transferring);
 
         if (SendFileChunks(packet.payload))
