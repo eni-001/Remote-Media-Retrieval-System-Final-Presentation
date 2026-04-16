@@ -11,5 +11,6 @@ enum class CommandType
     StartTransfer = 6,
     TransferChunk = 7,
     TransferComplete = 8,
-    Error = 9
+    Error = 9,
+    Response = 10
 };
