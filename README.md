@@ -1,6 +1,4 @@
-"""# Server-Side Implementation
-
-## Overview
+## Server-side Overview
 This component handles all client requests, acting as the core of the system. It performs authentication, provides file listings, and manages file transfers. The server receives commands, processes them according to the current state, and dispatches appropriate responses to the client.
 
 ## Files Modified
