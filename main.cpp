@@ -4,17 +4,38 @@
 
 #include "ServerController.h"
 #include "Logger.h"
+#include "Packet.h"
+#include "CommandType.h"
 
 void DisplayServerMenu()
 {
     std::cout << "\n===== Server Application Menu =====\n";
     std::cout << "1. Start Server\n";
-    std::cout << "2. Authenticate Client\n";
-    std::cout << "3. Begin Transfer\n";
+    std::cout << "2. Wait for Client Connection\n";
+    std::cout << "3. Process One Client Packet\n";
     std::cout << "4. Show Current State\n";
     std::cout << "5. Stop Server\n";
     std::cout << "6. Exit\n";
     std::cout << "Select an option: ";
+}
+
+std::string CommandToString(CommandType command)
+{
+    switch (command)
+    {
+    case CommandType::Authenticate:
+        return "Authenticate";
+    case CommandType::RequestFileList:
+        return "RequestFileList";
+    case CommandType::GetImage:
+        return "GetImage";
+    case CommandType::Response:
+        return "Response";
+    case CommandType::Error:
+        return "Error";
+    default:
+        return "Unknown";
+    }
 }
 
 int main()
@@ -33,12 +54,12 @@ int main()
         if (!(std::cin >> choice))
         {
             std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
             std::cout << "Invalid input. Please enter a number.\n";
             continue;
         }
 
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::cin.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
 
         if (choice == 1)
         {
@@ -60,41 +81,53 @@ int main()
         }
         else if (choice == 2)
         {
-            std::string username;
-            std::string password;
+            std::cout << "Waiting for client connection...\n";
 
-            std::cout << "Enter Client Username: ";
-            std::getline(std::cin, username);
-
-            std::cout << "Enter Client Password: ";
-            std::getline(std::cin, password);
-
-            if (controller.AuthenticateClient(username, password))
+            if (controller.AcceptClient())
             {
-                std::cout << "Client authenticated successfully.\n";
-                std::cout << "Current State: " << controller.GetCurrentState() << "\n";
-                Logger::WriteLog(logFile, "Client authenticated successfully.");
+                std::cout << "Client connected successfully.\n";
+                Logger::WriteRxLog(logFile, "Client connected to server.");
             }
             else
             {
-                std::cout << "Client authentication failed.\n";
-                std::cout << "Current State: " << controller.GetCurrentState() << "\n";
-                Logger::WriteLog(logFile, "Client authentication failed.");
+                std::cout << "Failed to accept client connection.\n";
+                Logger::WriteLog(logFile, "Client connection accept failed.");
             }
         }
         else if (choice == 3)
         {
-            if (controller.BeginTransfer())
+            Packet receivedPacket = controller.ReceivePacket();
+
+            if (receivedPacket.command == CommandType::None && receivedPacket.payload.empty())
             {
-                std::cout << "Transfer started successfully.\n";
-                std::cout << "Current State: " << controller.GetCurrentState() << "\n";
-                Logger::WriteLog(logFile, "Transfer started.");
+                std::cout << "No packet received.\n";
+                Logger::WriteLog(logFile, "No packet received from client.");
+                continue;
+            }
+
+            std::cout << "Received Packet:\n";
+            std::cout << "  Packet Type: " << receivedPacket.packetType << "\n";
+            std::cout << "  Command: " << CommandToString(receivedPacket.command) << "\n";
+            std::cout << "  Session ID: " << receivedPacket.sessionId << "\n";
+            std::cout << "  Payload Length: " << receivedPacket.payloadLength << "\n";
+            std::cout << "  Sequence Number: " << receivedPacket.sequenceNumber << "\n";
+            std::cout << "  Payload: " << receivedPacket.payload << "\n";
+            std::cout << "  Checksum: " << receivedPacket.checksum << "\n";
+
+            Logger::WriteRxLog(logFile, "Received packet with command " + CommandToString(receivedPacket.command));
+
+            Packet responsePacket = controller.ProcessPacket(receivedPacket);
+
+            if (controller.SendPacket(responsePacket))
+            {
+                std::cout << "Sent Response Packet:\n";
+                std::cout << "  Payload: " << responsePacket.payload << "\n";
+                Logger::WriteTxLog(logFile, "Sent response packet with payload: " + responsePacket.payload);
             }
             else
             {
-                std::cout << "Transfer could not start.\n";
-                std::cout << "Current State: " << controller.GetCurrentState() << "\n";
-                Logger::WriteLog(logFile, "Transfer failed to start.");
+                std::cout << "Failed to send response packet.\n";
+                Logger::WriteLog(logFile, "Failed to send response packet to client.");
             }
         }
         else if (choice == 4)
@@ -111,6 +144,7 @@ int main()
         }
         else if (choice == 6)
         {
+            controller.StopServer();
             std::cout << "Exiting server application.\n";
             Logger::WriteLog(logFile, "Server application exited.");
             break;
